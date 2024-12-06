@@ -1,132 +1,167 @@
+import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.pipeline import Pipeline
-from sklearn.compose import ColumnTransformer
-from sklearn.metrics import accuracy_score, classification_report
-from sklearn.ensemble import VotingClassifier
-
-# Load the data
-data = pd.read_csv("ckd.csv")
-
-# Remove 'id' column from features
-X = data.drop(['classification', 'id'], axis=1)
-y = data['classification']
-
-# Convert target to binary (0 for 'notckd', 1 for 'ckd')
-y = (y == 'ckd').astype(int)
-
-# Split the data
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-# Identify numeric and categorical columns
-numeric_features = X.select_dtypes(include=['int64', 'float64']).columns
-categorical_features = X.select_dtypes(include=['object']).columns
-
-# Create preprocessing pipelines
-numeric_transformer = Pipeline(steps=[
-    ('imputer', SimpleImputer(strategy='median')),
-    ('scaler', StandardScaler())
-])
-
-categorical_transformer = Pipeline(steps=[
-    ('imputer', SimpleImputer(strategy='constant', fill_value='missing')),
-    ('onehot', OneHotEncoder(handle_unknown='ignore'))
-])
-
-# Combine preprocessing steps
-preprocessor = ColumnTransformer(
-    transformers=[
-        ('num', numeric_transformer, numeric_features),
-        ('cat', categorical_transformer, categorical_features)
-    ])
-
-# Create base models
-rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
-gb_model = GradientBoostingClassifier(n_estimators=100, random_state=42)
-lr_model = LogisticRegression(random_state=42)
-
-# Create voting classifier
-ensemble_model = VotingClassifier(
-    estimators=[
-        ('rf', rf_model),
-        ('gb', gb_model),
-        ('lr', lr_model)
-    ],
-    voting='soft'
+from sklearn.ensemble import (
+    BaggingClassifier,
+    RandomForestClassifier,
+    AdaBoostClassifier,
+    GradientBoostingClassifier,
+    VotingClassifier,
 )
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.neural_network import MLPClassifier
+from sklearn.svm import SVC
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    classification_report,
+    confusion_matrix,
+)
+import seaborn as sns
+import matplotlib.pyplot as plt
 
-# Create final pipeline
-final_model = Pipeline(steps=[
-    ('preprocessor', preprocessor),
-    ('classifier', ensemble_model)
-])
+# Load dataset
+df = pd.read_csv("ckd.csv")
 
-# Fit the model
-final_model.fit(X_train, y_train)
+# Drop unnecessary columns if they exist
+columns_to_drop = ["id"]
+df = df.drop(columns=[col for col in columns_to_drop if col in df.columns], axis=1)
 
-# Make predictions
-y_pred = final_model.predict(X_test)
+# Handle missing values
+df = df.replace("?", np.nan)
+df = df.fillna(df.median(numeric_only=True))
+df = df.fillna(df.mode().iloc[0])
 
-# Evaluate the model
+# Encode categorical columns
+categorical_cols = df.select_dtypes(include=["object"]).columns
+label_encoders = {}
+for col in categorical_cols:
+    le = LabelEncoder()
+    df[col] = le.fit_transform(df[col])
+    label_encoders[col] = le
+
+# Split features and target
+X = df.drop("classification", axis=1)
+y = df["classification"]
+
+# Train-test split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+
+# Scale features
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
+
+# Models
+models = {
+    "Bagging": BaggingClassifier(DecisionTreeClassifier(), max_samples=0.5, max_features=1.0, n_estimators=20),
+    "Random Forest": RandomForestClassifier(max_depth=5, random_state=42),
+    "Neural Network": MLPClassifier(solver="lbfgs", alpha=1e-5, hidden_layer_sizes=(130,), random_state=42),
+    "SVM": SVC(kernel="linear", probability=True),
+    "AdaBoost": AdaBoostClassifier(algorithm="SAMME"),
+    "KNN": KNeighborsClassifier(),
+    "Decision Tree": DecisionTreeClassifier(),
+    "Gradient Boosting": GradientBoostingClassifier(),
+}
+
+# Evaluate each model
+results = {}
+for name, model in models.items():
+    print(f"Training and evaluating {name}...")
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred, average="macro", zero_division=1)
+    recall = recall_score(y_test, y_pred, average="macro", zero_division=1)
+    f1 = f1_score(y_test, y_pred, average="macro", zero_division=1)
+
+    results[name] = {
+        "Accuracy": accuracy,
+        "Precision": precision,
+        "Recall": recall,
+        "F1 Score": f1,
+    }
+
+    print(f"{name} Results:")
+    print(f"  Accuracy: {accuracy:.4f}")
+    print(f"  Precision: {precision:.4f}")
+    print(f"  Recall: {recall:.4f}")
+    print(f"  F1 Score: {f1:.4f}")
+    print("\n")
+
+# Voting Classifier
+print("Training and evaluating Voting Classifier...")
+evs = VotingClassifier(
+    estimators=[(name, model) for name, model in models.items()],
+    voting="hard",
+)
+evs.fit(X_train, y_train)
+y_pred = evs.predict(X_test)
+
 accuracy = accuracy_score(y_test, y_pred)
-print(f"Accuracy: {accuracy:.2f}")
-print("\nClassification Report:")
-print(classification_report(y_test, y_pred, target_names=['Not CKD', 'CKD']))
+precision = precision_score(y_test, y_pred, average="macro", zero_division=1)
+recall = recall_score(y_test, y_pred, average="macro", zero_division=1)
+f1 = f1_score(y_test, y_pred, average="macro", zero_division=1)
 
+results["Voting Classifier"] = {
+    "Accuracy": accuracy,
+    "Precision": precision,
+    "Recall": recall,
+    "F1 Score": f1,
+}
 
-# Function to predict for new data
-def predict_ckd(new_data):
-    # Ensure new_data has all required columns (except 'id' and 'classification')
-    required_columns = set(X.columns)
-    new_data_columns = set(new_data.columns)
+print("Voting Classifier Results:")
+print(f"  Accuracy: {accuracy:.4f}")
+print(f"  Precision: {precision:.4f}")
+print(f"  Recall: {recall:.4f}")
+print(f"  F1 Score: {f1:.4f}")
+print("\n")
 
-    if not required_columns.issubset(new_data_columns):
-        missing_columns = required_columns - new_data_columns
-        raise ValueError(f"Missing columns in new data: {missing_columns}")
+# Voting Classifier
+print("Training and evaluating Voting Classifier...")
+evs = VotingClassifier(
+    estimators=[(name, model) for name, model in models.items()],
+    voting="hard",
+)
+evs.fit(X_train, y_train)
+y_pred = evs.predict(X_test)
 
-    # Select only the required columns in the correct order
-    new_data = new_data[X.columns]
+accuracy = accuracy_score(y_test, y_pred)
+precision = precision_score(y_test, y_pred, average="macro")
+recall = recall_score(y_test, y_pred, average="macro")
+f1 = f1_score(y_test, y_pred, average="macro")
 
-    prediction = final_model.predict(new_data)
-    probability = final_model.predict_proba(new_data)
-    return "CKD" if prediction[0] == 1 else "Not CKD", probability[0]
+results["Voting Classifier"] = {
+    "Accuracy": accuracy,
+    "Precision": precision,
+    "Recall": recall,
+    "F1 Score": f1,
+}
 
+print("Voting Classifier Results:")
+print(f"  Accuracy: {accuracy:.4f}")
+print(f"  Precision: {precision:.4f}")
+print(f"  Recall: {recall:.4f}")
+print(f"  F1 Score: {f1:.4f}")
+print("\n")
 
-# Example usage
-new_patient = pd.DataFrame({
-    'age': [50],
-    'bp': [80],
-    'sg': [1.020],
-    'al': [1],
-    'su': [0],
-    'rbc': ['normal'],
-    'pc': ['normal'],
-    'pcc': ['notpresent'],
-    'ba': ['notpresent'],
-    'bgr': [100],
-    'bu': [30],
-    'sc': [1.2],
-    'sod': [135],
-    'pot': [4.0],
-    'hemo': [12.0],
-    'pcv': [40],
-    'wc': [8000],
-    'rc': [4.5],
-    'htn': ['no'],
-    'dm': ['no'],
-    'cad': ['no'],
-    'appet': ['good'],
-    'pe': ['no'],
-    'ane': ['no']
-})
+# Confusion Matrix for Voting Classifier
+conf_matrix = confusion_matrix(y_test, y_pred)
+sns.heatmap(conf_matrix, annot=True, fmt="d", cmap="Blues")
+plt.title("Confusion Matrix for Voting Classifier")
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.show()
 
-try:
-    result, prob = predict_ckd(new_patient)
-    print(f"\nPrediction for new patient: {result}")
-    print(f"Probability: Not CKD: {prob[0]:.2f}, CKD: {prob[1]:.2f}")
-except ValueError as e:
-    print(f"Error: {e}")
+# Summarize results
+print("Summary of Results:")
+for name, metrics in results.items():
+    print(f"{name}:")
+    for metric, value in metrics.items():
+        print(f"  {metric}: {value:.4f}")
+    print("\n")
